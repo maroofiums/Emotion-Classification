@@ -1,0 +1,9 @@
+datasets
+torch
+pandas
+numpy
+scikit-learn
+matplotlib
+seaborn
+tqdm
+streamlit
