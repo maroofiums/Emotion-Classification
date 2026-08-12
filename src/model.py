@@ -82,3 +82,24 @@ class EmotionBiLSTM(nn.Module):
         )
 
         return logits
+
+if __name__ == "__main__":
+    model = EmotionBiLSTM(
+        vocab_size=20_000,
+        embedding_dim=128,
+        hidden_dim=128,
+        num_layers=2,
+        num_classes=6,
+        dropout=0.3,
+    )
+
+    x = torch.randint(
+        low=0,
+        high=20_000,
+        size=(4, 20),
+    )
+
+    output = model(x)
+
+    print("Input shape :", x.shape)
+    print("Output shape:", output.shape)
