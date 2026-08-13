@@ -5,7 +5,12 @@ from typing import List, Tuple
 import torch
 from torch.nn.utils.rnn import pad_sequence
 
-
+from src.config import (
+    PAD_TOKEN,
+    UNK_TOKEN,
+    PAD_IDX,
+    UNK_IDX
+)
 
 def tokenize(text: str) -> List[str]:
     """
