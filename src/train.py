@@ -1,11 +1,12 @@
 import random
-from typing import Any
 
 import numpy as np
 import torch
 import torch.nn as nn
-from torch import Tensor
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import (
+    DataLoader,
+    TensorDataset,
+)
 
 from src.config import (
     BATCH_SIZE,
@@ -20,15 +21,34 @@ from src.config import (
     RANDOM_SEED,
     VOCAB_SIZE,
 )
-from src.dataset import load_emotion_dataset
-from src.model import EmotionBiLSTM
-from src.preprocessing import Vocabulary, encode_texts, pad_texts
+
+from src.dataset import (
+    load_emotion_dataset,
+)
+
+from src.model import (
+    EmotionBiLSTM,
+)
+
+from src.preprocessing import (
+    Vocabulary,
+    encode_texts,
+    pad_texts_with_lengths,
+)
 
 
-def set_seed(seed: int = RANDOM_SEED) -> None:
-    """Set random seeds for reproducibility."""
+MAX_LENGTH = 50
+
+
+def set_seed(
+    seed: int = RANDOM_SEED,
+) -> None:
+    """
+    Set random seeds for reproducibility.
+    """
 
     random.seed(seed)
+
     np.random.seed(seed)
 
     torch.manual_seed(seed)
@@ -37,51 +57,76 @@ def set_seed(seed: int = RANDOM_SEED) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def prepare_data(
-    dataset: Any,
-) -> tuple[
-    Vocabulary,
-    Tensor,
-    Tensor,
-    Tensor,
-    Tensor,
-]:
+def prepare_data(dataset):
     """
-    Build vocabulary using only the training set
-    and convert all splits into tensors.
+    Prepare train and validation data.
+
+    Vocabulary is built ONLY from
+    the training set.
     """
 
+    # -------------------------
+    # Get raw data
+    # -------------------------
+
     train_texts = dataset["train"]["text"]
+
     val_texts = dataset["validation"]["text"]
 
     train_labels = dataset["train"]["label"]
+
     val_labels = dataset["validation"]["label"]
 
-    # Build vocabulary ONLY from training data
+    # -------------------------
+    # Build vocabulary
+    # -------------------------
+
     vocabulary = Vocabulary(
-        max_size=VOCAB_SIZE,
+        max_size=VOCAB_SIZE
     )
 
-    vocabulary.build(train_texts)
+    vocabulary.build(
+        train_texts
+    )
 
+    # -------------------------
     # Encode
+    # -------------------------
+
     train_encoded = encode_texts(
-        train_texts,
-        vocabulary,
-        max_length=50,
+        texts=train_texts,
+        vocabulary=vocabulary,
+        max_length=MAX_LENGTH,
     )
 
     val_encoded = encode_texts(
-        val_texts,
-        vocabulary,
-        max_length=50,
+        texts=val_texts,
+        vocabulary=vocabulary,
+        max_length=MAX_LENGTH,
     )
 
-    # Pad
-    train_inputs = pad_texts(train_encoded)
-    val_inputs = pad_texts(val_encoded)
+    # -------------------------
+    # Padding + lengths
+    # -------------------------
 
+    (
+        train_inputs,
+        train_lengths,
+    ) = pad_texts_with_lengths(
+        train_encoded
+    )
+
+    (
+        val_inputs,
+        val_lengths,
+    ) = pad_texts_with_lengths(
+        val_encoded
+    )
+
+    # -------------------------
     # Labels
+    # -------------------------
+
     train_labels = torch.tensor(
         train_labels,
         dtype=torch.long,
@@ -95,30 +140,35 @@ def prepare_data(
     return (
         vocabulary,
         train_inputs,
+        train_lengths,
         train_labels,
         val_inputs,
+        val_lengths,
         val_labels,
     )
 
 
 def create_dataloaders(
-    train_inputs: Tensor,
-    train_labels: Tensor,
-    val_inputs: Tensor,
-    val_labels: Tensor,
-) -> tuple[
-    DataLoader[TensorDataset],
-    DataLoader[TensorDataset],
-]:
-    """Create PyTorch DataLoaders."""
+    train_inputs,
+    train_lengths,
+    train_labels,
+    val_inputs,
+    val_lengths,
+    val_labels,
+):
+    """
+    Create PyTorch DataLoaders.
+    """
 
     train_dataset = TensorDataset(
         train_inputs,
+        train_lengths,
         train_labels,
     )
 
     val_dataset = TensorDataset(
         val_inputs,
+        val_lengths,
         val_labels,
     )
 
@@ -134,45 +184,91 @@ def create_dataloaders(
         shuffle=False,
     )
 
-    return train_loader, val_loader
+    return (
+        train_loader,
+        val_loader,
+    )
 
 
 def train_one_epoch(
-    model: EmotionBiLSTM,
-    loader: DataLoader[TensorDataset],
-    criterion: nn.Module,
-    optimizer: torch.optim.Optimizer,
-    device: torch.device,
-) -> tuple[float, float]:
-    """Train model for one epoch."""
+    model,
+    loader,
+    criterion,
+    optimizer,
+    device,
+):
+    """
+    Train model for one epoch.
+    """
 
     model.train()
 
     total_loss = 0.0
+
     correct = 0
+
     total = 0
 
-    for inputs, labels in loader:
+    for (
+        inputs,
+        lengths,
+        labels,
+    ) in loader:
+
+        # -------------------------
+        # Move data to device
+        # -------------------------
+
         inputs = inputs.to(device)
+
+        lengths = lengths.to(device)
+
         labels = labels.to(device)
+
+        # -------------------------
+        # Clear gradients
+        # -------------------------
 
         optimizer.zero_grad()
 
-        outputs = model(inputs)
+        # -------------------------
+        # Forward pass
+        # -------------------------
+
+        outputs = model(
+            inputs,
+            lengths,
+        )
+
+        # -------------------------
+        # Calculate loss
+        # -------------------------
 
         loss = criterion(
             outputs,
             labels,
         )
 
+        # -------------------------
+        # Backpropagation
+        # -------------------------
+
         loss.backward()
 
+        # -------------------------
+        # Update parameters
+        # -------------------------
+
         optimizer.step()
+
+        # -------------------------
+        # Statistics
+        # -------------------------
 
         total_loss += loss.item()
 
         predictions = outputs.argmax(
-            dim=1,
+            dim=1
         )
 
         correct += (
@@ -187,30 +283,51 @@ def train_one_epoch(
 
     accuracy = correct / total
 
-    return average_loss, accuracy
+    return (
+        average_loss,
+        accuracy,
+    )
 
 
 def validate(
-    model: EmotionBiLSTM,
-    loader: DataLoader[TensorDataset],
-    criterion: nn.Module,
-    device: torch.device,
-) -> tuple[float, float]:
-    """Evaluate model on validation data."""
+    model,
+    loader,
+    criterion,
+    device,
+):
+    """
+    Evaluate model on validation data.
+    """
 
     model.eval()
 
     total_loss = 0.0
+
     correct = 0
+
     total = 0
 
     with torch.no_grad():
-        for inputs, labels in loader:
+
+        for (
+            inputs,
+            lengths,
+            labels,
+        ) in loader:
+
             inputs = inputs.to(device)
+
+            lengths = lengths.to(device)
+
             labels = labels.to(device)
 
-            outputs = model(inputs)
+            # Forward pass
+            outputs = model(
+                inputs,
+                lengths,
+            )
 
+            # Loss
             loss = criterion(
                 outputs,
                 labels,
@@ -218,8 +335,9 @@ def validate(
 
             total_loss += loss.item()
 
+            # Predictions
             predictions = outputs.argmax(
-                dim=1,
+                dim=1
             )
 
             correct += (
@@ -234,11 +352,17 @@ def validate(
 
     accuracy = correct / total
 
-    return average_loss, accuracy
+    return (
+        average_loss,
+        accuracy,
+    )
 
 
-def main() -> None:
-    """Load data, train the model, and save the best checkpoint."""
+def main():
+
+    # =========================
+    # Setup
+    # =========================
 
     set_seed()
 
@@ -248,41 +372,84 @@ def main() -> None:
         else "cpu"
     )
 
-    print(f"Device: {device}")
+    print(
+        f"Device: {device}"
+    )
 
-    # Load dataset
+    # =========================
+    # Load Dataset
+    # =========================
+
+    print(
+        "\nLoading dataset..."
+    )
+
     dataset = load_emotion_dataset()
 
-    # Prepare data
+    # =========================
+    # Prepare Data
+    # =========================
+
+    print(
+        "Preparing data..."
+    )
+
     (
         vocabulary,
         train_inputs,
+        train_lengths,
         train_labels,
         val_inputs,
+        val_lengths,
         val_labels,
-    ) = prepare_data(dataset)
-
-    print(
-        f"Vocabulary size: {len(vocabulary)}"
+    ) = prepare_data(
+        dataset
     )
 
     print(
-        f"Train samples: {len(train_labels)}"
+        f"Vocabulary size: "
+        f"{len(vocabulary)}"
     )
 
     print(
-        f"Validation samples: {len(val_labels)}"
+        f"Train samples: "
+        f"{len(train_labels)}"
     )
 
+    print(
+        f"Validation samples: "
+        f"{len(val_labels)}"
+    )
+
+    # =========================
     # DataLoaders
-    train_loader, val_loader = create_dataloaders(
-        train_inputs,
-        train_labels,
-        val_inputs,
-        val_labels,
+    # =========================
+
+    train_loader, val_loader = (
+        create_dataloaders(
+            train_inputs,
+            train_lengths,
+            train_labels,
+            val_inputs,
+            val_lengths,
+            val_labels,
+        )
     )
 
+    print(
+        f"Train batches: "
+        f"{len(train_loader)}"
+    )
+
+    print(
+        f"Validation batches: "
+        f"{len(val_loader)}"
+    )
+
+    # =========================
     # Model
+    # =========================
+
     model = EmotionBiLSTM(
         vocab_size=len(vocabulary),
         embedding_dim=EMBEDDING_DIM,
@@ -292,82 +459,145 @@ def main() -> None:
         dropout=DROPOUT,
     ).to(device)
 
-    print("\nModel:")
-    print(model)
+    print(
+        "\nModel created."
+    )
 
-    # Loss
+    # =========================
+    # Loss Function
+    # =========================
+
     criterion = nn.CrossEntropyLoss()
 
+    # =========================
     # Optimizer
+    # =========================
+
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=LEARNING_RATE,
     )
 
-    # Training
-    best_val_accuracy = 0.0
+    # =========================
+    # Model Directory
+    # =========================
 
     MODEL_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    for epoch in range(1, EPOCHS + 1):
-        train_loss, train_accuracy = train_one_epoch(
-            model,
-            train_loader,
-            criterion,
-            optimizer,
-            device,
+    # =========================
+    # Training
+    # =========================
+
+    best_val_accuracy = 0.0
+
+    for epoch in range(
+        1,
+        EPOCHS + 1,
+    ):
+
+        train_loss, train_accuracy = (
+            train_one_epoch(
+                model=model,
+                loader=train_loader,
+                criterion=criterion,
+                optimizer=optimizer,
+                device=device,
+            )
         )
 
-        val_loss, val_accuracy = validate(
-            model,
-            val_loader,
-            criterion,
-            device,
+        val_loss, val_accuracy = (
+            validate(
+                model=model,
+                loader=val_loader,
+                criterion=criterion,
+                device=device,
+            )
         )
 
         print(
-            f"\nEpoch {epoch}/{EPOCHS}"
+            f"\nEpoch "
+            f"{epoch}/{EPOCHS}"
         )
 
         print(
-            f"Train Loss: {train_loss:.4f} | "
-            f"Train Acc: {train_accuracy:.4f}"
+            f"Train Loss: "
+            f"{train_loss:.4f} | "
+            f"Train Acc: "
+            f"{train_accuracy:.4f}"
         )
 
         print(
-            f"Val Loss:   {val_loss:.4f} | "
-            f"Val Acc:   {val_accuracy:.4f}"
+            f"Val Loss:   "
+            f"{val_loss:.4f} | "
+            f"Val Acc:    "
+            f"{val_accuracy:.4f}"
         )
 
-        # Save best model
+        # =====================
+        # Save Best Model
+        # =====================
+
         if val_accuracy > best_val_accuracy:
-            best_val_accuracy = val_accuracy
+
+            best_val_accuracy = (
+                val_accuracy
+            )
 
             model_path = (
                 MODEL_DIR
                 / "emotion_bilstm.pt"
             )
 
+            checkpoint = {
+                "model_state_dict":
+                    model.state_dict(),
+
+                "vocab_size":
+                    len(vocabulary),
+
+                "embedding_dim":
+                    EMBEDDING_DIM,
+
+                "hidden_dim":
+                    HIDDEN_DIM,
+
+                "num_layers":
+                    NUM_LAYERS,
+
+                "num_classes":
+                    NUM_CLASSES,
+
+                "dropout":
+                    DROPOUT,
+
+                "max_length":
+                    MAX_LENGTH,
+
+                "vocabulary":
+                    vocabulary.token_to_id,
+            }
+
             torch.save(
-                {
-                    "model_state_dict": model.state_dict(),
-                    "vocab_size": len(vocabulary),
-                    "embedding_dim": EMBEDDING_DIM,
-                    "hidden_dim": HIDDEN_DIM,
-                    "num_layers": NUM_LAYERS,
-                    "num_classes": NUM_CLASSES,
-                    "dropout": DROPOUT,
-                    "vocabulary": vocabulary.token_to_id,
-                },
+                checkpoint,
                 model_path,
             )
 
             print(
-                f"Saved best model → {model_path}"
+                f"Saved best model → "
+                f"{model_path}"
             )
+
+    print(
+        "\nTraining complete."
+    )
+
+    print(
+        f"Best validation accuracy: "
+        f"{best_val_accuracy:.4f}"
+    )
 
 
 if __name__ == "__main__":

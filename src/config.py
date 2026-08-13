@@ -49,3 +49,6 @@ EPOCHS = 10
 
 PAD_TOKEN = "<PAD>"
 UNK_TOKEN = "<UNK>"
+
+PAD_IDX = 0
+UNK_IDX = 1

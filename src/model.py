@@ -1,10 +1,11 @@
 import torch
 import torch.nn as nn
+from torch.nn.utils.rnn import pack_padded_sequence
 
 
 class EmotionBiLSTM(nn.Module):
     """
-    Bidirectional LSTM model for emotion classification.
+    Bidirectional LSTM for emotion classification.
     """
 
     def __init__(
@@ -19,11 +20,19 @@ class EmotionBiLSTM(nn.Module):
     ):
         super().__init__()
 
+        # -------------------------
+        # Embedding
+        # -------------------------
+
         self.embedding = nn.Embedding(
             num_embeddings=vocab_size,
             embedding_dim=embedding_dim,
             padding_idx=padding_idx,
         )
+
+        # -------------------------
+        # BiLSTM
+        # -------------------------
 
         self.lstm = nn.LSTM(
             input_size=embedding_dim,
@@ -31,10 +40,24 @@ class EmotionBiLSTM(nn.Module):
             num_layers=num_layers,
             batch_first=True,
             bidirectional=True,
-            dropout=dropout if num_layers > 1 else 0.0,
+            dropout=(
+                dropout
+                if num_layers > 1
+                else 0.0
+            ),
         )
 
-        self.dropout = nn.Dropout(dropout)
+        # -------------------------
+        # Dropout
+        # -------------------------
+
+        self.dropout = nn.Dropout(
+            dropout
+        )
+
+        # -------------------------
+        # Classifier
+        # -------------------------
 
         self.classifier = nn.Linear(
             hidden_dim * 2,
@@ -44,46 +67,114 @@ class EmotionBiLSTM(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
+        lengths: torch.Tensor,
     ) -> torch.Tensor:
+        """
+        Forward pass.
 
-        # x:
-        # [batch_size, sequence_length]
+        Args:
+            x:
+                [batch_size, sequence_length]
+
+            lengths:
+                [batch_size]
+
+        Returns:
+            logits:
+                [batch_size, num_classes]
+        """
+
+        # -------------------------
+        # Embedding
+        # -------------------------
 
         embedded = self.embedding(x)
 
-        # embedded:
-        # [batch_size, sequence_length, embedding_dim]
+        # Shape:
+        # [batch, seq_len, embedding_dim]
 
-        output, (hidden, cell) = self.lstm(embedded)
+        # -------------------------
+        # Pack padded sequences
+        # -------------------------
 
-        # Because the LSTM is bidirectional:
-        #
+        packed = pack_padded_sequence(
+            embedded,
+            lengths.cpu(),
+            batch_first=True,
+            enforce_sorted=False,
+        )
+
+        # -------------------------
+        # BiLSTM
+        # -------------------------
+
+        _, (hidden, _) = self.lstm(
+            packed
+        )
+
         # hidden shape:
-        # [num_layers * 2, batch_size, hidden_dim]
+        #
+        # [num_layers * 2,
+        #  batch_size,
+        #  hidden_dim]
+
+        # -------------------------
+        # Final forward hidden state
+        # -------------------------
 
         forward_hidden = hidden[-2]
+
+        # Shape:
+        # [batch_size, hidden_dim]
+
+        # -------------------------
+        # Final backward hidden state
+        # -------------------------
+
         backward_hidden = hidden[-1]
 
-        # Concatenate forward and backward representations
-        #
-        # [batch_size, hidden_dim * 2]
+        # Shape:
+        # [batch_size, hidden_dim]
+
+        # -------------------------
+        # Combine directions
+        # -------------------------
 
         hidden_state = torch.cat(
-            (forward_hidden, backward_hidden),
+            (
+                forward_hidden,
+                backward_hidden,
+            ),
             dim=1,
         )
+
+        # Shape:
+        # [batch_size, hidden_dim * 2]
+
+        # -------------------------
+        # Dropout
+        # -------------------------
 
         hidden_state = self.dropout(
             hidden_state
         )
 
+        # -------------------------
+        # Classification
+        # -------------------------
+
         logits = self.classifier(
             hidden_state
         )
 
+        # Shape:
+        # [batch_size, num_classes]
+
         return logits
 
+
 if __name__ == "__main__":
+
     model = EmotionBiLSTM(
         vocab_size=20_000,
         embedding_dim=128,
@@ -93,14 +184,30 @@ if __name__ == "__main__":
         dropout=0.3,
     )
 
+    # Fake batch
     x = torch.randint(
         low=0,
         high=20_000,
         size=(4, 20),
     )
 
-    output = model(x)
+    lengths = torch.tensor(
+        [20, 17, 12, 8]
+    )
 
+    output = model(
+        x,
+        lengths,
+    )
+
+    print("Input shape:")
+    print(x.shape)
+
+    print("\nLengths:")
+    print(lengths)
+
+    print("\nOutput shape:")
+    print(output.shape)
+
+    print("\nModel:")
     print(model)
-    print("Input shape :", x.shape)
-    print("Output shape:", output.shape)
