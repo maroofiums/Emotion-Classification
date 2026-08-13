@@ -101,5 +101,6 @@ if __name__ == "__main__":
 
     output = model(x)
 
+    print(model)
     print("Input shape :", x.shape)
     print("Output shape:", output.shape)
